@@ -8,7 +8,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret";
 
 // ---------------- Signup ----------------
 router.post('/signup', async (req, res) => {
-  const { name, email, password, confirmPassword } = req.body;
+  const { name, email, password, confirmPassword, faceDescriptor } = req.body;
 
   if (!email || !password || !confirmPassword) {
     return res.status(400).json({ message: 'All fields are required' });
@@ -24,7 +24,7 @@ router.post('/signup', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const newUser = new User({ name, email, password: hashedPassword });
+    const newUser = new User({ name, email, password: hashedPassword, faceDescriptor: Array.isArray(faceDescriptor) ? faceDescriptor : [] });
     await newUser.save();
 
     res.status(201).json({ message: 'User created successfully', user: { name, email } });
@@ -70,6 +70,53 @@ router.post('/google-login', async (req, res) => {
     res.json({ status: 1, token, user });
   } catch (err) {
     res.json({ status: 0, message: err.message });
+  }
+});
+
+router.post('/face-enroll', async (req, res) => {
+  const { email, descriptor } = req.body;
+  if (!email || !Array.isArray(descriptor)) {
+    return res.status(400).json({ status: 0, message: 'Email and descriptor are required' });
+  }
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ status: 0, message: 'User not found' });
+    user.faceDescriptor = descriptor;
+    await user.save();
+    return res.json({ status: 1, message: 'Face enrolled' });
+  } catch (err) {
+    return res.status(500).json({ status: 0, message: err.message });
+  }
+});
+
+router.post('/face-login', async (req, res) => {
+  const { email, descriptor } = req.body;
+  if (!email || !Array.isArray(descriptor)) {
+    return res.status(400).json({ status: 0, message: 'Email and descriptor are required' });
+  }
+  function euclidean(a, b) {
+    if (!a || !b || a.length !== b.length) return Infinity;
+    let s = 0;
+    for (let i = 0; i < a.length; i++) {
+      const d = a[i] - b[i];
+      s += d * d;
+    }
+    return Math.sqrt(s);
+  }
+  try {
+    const user = await User.findOne({ email });
+    if (!user || !Array.isArray(user.faceDescriptor) || user.faceDescriptor.length === 0) {
+      return res.status(400).json({ status: 0, message: 'Face not enrolled for this user' });
+    }
+    const dist = euclidean(descriptor, user.faceDescriptor);
+    const threshold = 0.6;
+    if (dist > threshold) {
+      return res.status(400).json({ status: 0, message: 'Face mismatch' });
+    }
+    const token = jwt.sign({ id: user._id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    return res.json({ status: 1, message: 'Face login successful', token, user: { name: user.name, email: user.email } });
+  } catch (err) {
+    return res.status(500).json({ status: 0, message: err.message });
   }
 });
 
